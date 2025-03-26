@@ -29,5 +29,15 @@ def main(model_conf):
             "emb_reg": False,
             "emb_proj": True,
         }
-
+    elif model_conf == 1:
+        d = {
+            "layer_class": models.GatedTCNLayerFilmConditioned,
+            "channels": 16,
+            "blocks": 2,
+            "layers": 8,
+            "dilation_growth": 2,
+            "kernel_size": 3,
+            "cond_pars": 64,
+            "emb_dim": 64,
+        }
     return d
