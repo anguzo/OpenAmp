@@ -1,17 +1,17 @@
-name: open-amp-demo
+name: openamp
 channels:
   - conda-forge
-  - pytorch
 dependencies:
-  - pytorch::pytorch
-  - torchaudio
+  - python=3.12
+  - pytorch=2.5.1
+  - torchaudio=2.5.1=cuda_126*
   - pandas
   - numpy
   - librosa
   - matplotlib
-  - wandb
   - tqdm
+  - pysoundfile
+  - tensorboard
   - pip
   - pip:
       - auraloss
-      - soundfile
