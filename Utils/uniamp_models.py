@@ -1,18 +1,27 @@
 import torch
 from torch import nn
 
-
-
-
-
-
 """ layer classes: GatedTCNLayer, FilmTCNLayer, GatedTCNLayerFilmConditioned, 
 ConditionedConv1D, GatedTCNLayerFullyConditioned
 """
 
+
 class TCN(nn.Module):
-    def __init__(self, layer_class: type, channels=8, blocks=2, layers=8, dilation_growth=2, kernel_size=3, cond_pars=5,
-                 emb_dim=128, num_emb=109, norm_emb=False, emb_reg=False, emb_proj=False):
+    def __init__(
+        self,
+        layer_class: type,
+        channels=8,
+        blocks=2,
+        layers=8,
+        dilation_growth=2,
+        kernel_size=3,
+        cond_pars=5,
+        emb_dim=128,
+        num_emb=109,
+        norm_emb=False,
+        emb_reg=False,
+        emb_proj=False,
+    ):
         super(TCN, self).__init__()
         # Set number of layers  and hidden_size for network layer/s
         self.layers = layers
@@ -30,12 +39,22 @@ class TCN(nn.Module):
                 torch.nn.ReLU(),
                 torch.nn.Linear(64, 128),
                 torch.nn.ReLU(),
-                torch.nn.Linear(128, cond_pars)
+                torch.nn.Linear(128, cond_pars),
             )
 
         self.first_conv = nn.Conv1d(in_channels=1, out_channels=channels, kernel_size=1)
         for b in range(blocks):
-            self.blocks.append(TCNBlock(layer_class, channels, channels, dilation_growth, kernel_size, layers, cond_pars))
+            self.blocks.append(
+                TCNBlock(
+                    layer_class,
+                    channels,
+                    channels,
+                    dilation_growth,
+                    kernel_size,
+                    layers,
+                    cond_pars,
+                )
+            )
         self.last_conv = nn.Conv1d(in_channels=channels, out_channels=1, kernel_size=1)
 
         self.emb = nn.Embedding(embedding_dim=emb_dim, num_embeddings=num_emb)
@@ -76,13 +95,24 @@ layers are applied, with the filter size 'kernel_size' and the dilation increasi
 
 
 class TCNBlock(nn.Module):
-    def __init__(self, layer_class, chan_input, chan_output, dilation_growth, kernel_size, layers, cond_pars):
+    def __init__(
+        self,
+        layer_class,
+        chan_input,
+        chan_output,
+        dilation_growth,
+        kernel_size,
+        layers,
+        cond_pars,
+    ):
         super(TCNBlock, self).__init__()
         self.channels = chan_output
-        dilations = [dilation_growth ** lay for lay in range(layers)]
+        dilations = [dilation_growth**lay for lay in range(layers)]
         self.layers = nn.ModuleList()
         for dil in dilations:
-            self.layers.append(layer_class(chan_input, chan_output, dil, kernel_size, cond_pars))
+            self.layers.append(
+                layer_class(chan_input, chan_output, dil, kernel_size, cond_pars)
+            )
 
     def forward(self, x, c):
         skip = 0
@@ -91,13 +121,14 @@ class TCNBlock(nn.Module):
             skip += zn
         return x, skip
 
-'''
+
+"""
 FiLM module -- adapted from https://github.com/csteinmetz1/micro-tcn/blob/main/microtcn/tcn.py
-'''
+"""
+
+
 class FiLM(torch.nn.Module):
-    def __init__(self,
-                 num_features,
-                 cond_dim):
+    def __init__(self, num_features, cond_dim):
         super().__init__()
         self.num_features = num_features
         self.adaptor = torch.nn.Linear(cond_dim, num_features * 2)
@@ -111,13 +142,14 @@ class FiLM(torch.nn.Module):
 
         return x
 
-'''
+
+"""
 Bias conditioning
-'''
+"""
+
+
 class BiasConditioning(torch.nn.Module):
-    def __init__(self,
-                 num_features,
-                 cond_dim):
+    def __init__(self, num_features, cond_dim):
         super().__init__()
         self.num_features = num_features
         self.adaptor = nn.Linear(cond_dim, num_features)
@@ -130,6 +162,7 @@ class BiasConditioning(torch.nn.Module):
 """ 
 Gated convolutional layer, zero pads and then applies a causal convolution to the input. Bias conditioning. """
 
+
 class GatedTCNLayer(nn.Module):
 
     def __init__(self, chan_input, chan_output, dilation, kernel_size, cond_pars):
@@ -137,49 +170,80 @@ class GatedTCNLayer(nn.Module):
         self.channels = chan_output
         self.in_chan = chan_input
 
-        self.conditioned_bias = BiasConditioning(chan_output*2, cond_pars)
-        self.conv = nn.Conv1d(in_channels=chan_input, out_channels=chan_output*2, kernel_size=kernel_size, stride=1,
-                              padding=0, dilation=dilation, bias=False)
+        self.conditioned_bias = BiasConditioning(chan_output * 2, cond_pars)
+        self.conv = nn.Conv1d(
+            in_channels=chan_input,
+            out_channels=chan_output * 2,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=0,
+            dilation=dilation,
+            bias=False,
+        )
 
-        self.resi_con = nn.Conv1d(in_channels=chan_output, out_channels=chan_output, kernel_size=1, stride=1, padding=0)
-        self.zpad = ((kernel_size-1)*dilation, 0)
+        self.resi_con = nn.Conv1d(
+            in_channels=chan_output,
+            out_channels=chan_output,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+        )
+        self.zpad = ((kernel_size - 1) * dilation, 0)
 
-    '''
+    """
         x dims: (batch, channels, time)
         c dims: (batch, channels/features)
-    '''
+    """
+
     def forward(self, x, c):
         residual = x
         # Zero pad on the left side, so that y is the same length as x
         y = self.conv(torch.nn.functional.pad(x, self.zpad))
         y = self.conditioned_bias(y, c)
-        z = torch.tanh(y[:, 0:self.channels, :]) * torch.sigmoid(y[:, self.channels:, :])
+        z = torch.tanh(y[:, 0 : self.channels, :]) * torch.sigmoid(
+            y[:, self.channels :, :]
+        )
         x = self.resi_con(z) + residual
         return x, z
 
 
-'''
+"""
 TCN layer with FiLM -- adapted from https://github.com/csteinmetz1/micro-tcn/blob/main/microtcn/tcn.py
-'''
+"""
+
+
 class FilmTCNLayer(nn.Module):
     def __init__(self, chan_input, chan_output, dilation, kernel_size, cond_pars):
         super().__init__()
         self.channels = chan_output
         self.in_chan = chan_input
 
-        self.conv = nn.Conv1d(in_channels=chan_input, out_channels=chan_output, kernel_size=kernel_size, stride=1,
-                              padding=0, dilation=dilation)
+        self.conv = nn.Conv1d(
+            in_channels=chan_input,
+            out_channels=chan_output,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=0,
+            dilation=dilation,
+        )
 
-        self.resi_con = nn.Conv1d(in_channels=chan_output, out_channels=chan_output, kernel_size=1, stride=1, padding=0)
-        self.zpad = ((kernel_size-1)*dilation, 0)
+        self.resi_con = nn.Conv1d(
+            in_channels=chan_output,
+            out_channels=chan_output,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+        )
+        self.zpad = ((kernel_size - 1) * dilation, 0)
 
         self.film = FiLM(chan_output, cond_pars)
         self.relu = nn.PReLU(chan_output)
 
-    '''
+    """
         x dims: (batch, channels, time)
         c dims: (batch, channels/features)
-    '''
+    """
+
     def forward(self, x, c):
         residual = x
 
@@ -191,9 +255,11 @@ class FilmTCNLayer(nn.Module):
         return x, z
 
 
-'''
+"""
 Gated TCN layer with FiLM conditioning
-'''
+"""
+
+
 class GatedTCNLayerFilmConditioned(nn.Module):
 
     def __init__(self, chan_input, chan_output, dilation, kernel_size, cond_pars):
@@ -201,30 +267,47 @@ class GatedTCNLayerFilmConditioned(nn.Module):
         self.channels = chan_output
         self.in_chan = chan_input
 
-        self.conv = nn.Conv1d(in_channels=chan_input, out_channels=chan_output*2, kernel_size=kernel_size, stride=1,
-                              padding=0, dilation=dilation)
-        self.film = FiLM(num_features=chan_output*2, cond_dim=cond_pars)
+        self.conv = nn.Conv1d(
+            in_channels=chan_input,
+            out_channels=chan_output * 2,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=0,
+            dilation=dilation,
+        )
+        self.film = FiLM(num_features=chan_output * 2, cond_dim=cond_pars)
 
-        self.resi_con = nn.Conv1d(in_channels=chan_output, out_channels=chan_output, kernel_size=1, stride=1, padding=0)
-        self.zpad = ((kernel_size-1)*dilation, 0)
+        self.resi_con = nn.Conv1d(
+            in_channels=chan_output,
+            out_channels=chan_output,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+        )
+        self.zpad = ((kernel_size - 1) * dilation, 0)
 
-    '''
+    """
         x dims: (batch, channels, time)
         c dims: (batch, channels/features)
-    '''
+    """
+
     def forward(self, x, c):
         residual = x
         # Zero pad on the left side, so that y is the same length as x
         y = self.conv(torch.nn.functional.pad(x, self.zpad))
         y = self.film(y, c)
-        z = torch.tanh(y[:, 0:self.channels, :]) * torch.sigmoid(y[:, self.channels:, :])
+        z = torch.tanh(y[:, 0 : self.channels, :]) * torch.sigmoid(
+            y[:, self.channels :, :]
+        )
         x = self.resi_con(z) + residual
         return x, z
 
 
-'''
+"""
 Conv1D module with conditioned kernel weights. No bias.
-'''
+"""
+
+
 class ConditionedConv1D(nn.Module):
     def __init__(self, in_channels, out_channels, dilation, kernel_size, cond_pars):
         super().__init__()
@@ -232,19 +315,26 @@ class ConditionedConv1D(nn.Module):
         self.out_channels = out_channels
         self.kernel_size = kernel_size
         self.dilation = dilation
-        self.adapter = nn.Linear(in_features=cond_pars, out_features=kernel_size*in_channels*out_channels)
+        self.adapter = nn.Linear(
+            in_features=cond_pars, out_features=kernel_size * in_channels * out_channels
+        )
 
     def forward(self, x, c):
         batch_size = x.shape[0]
-        x = torch.reshape(x, (1, self.in_channels*batch_size, x.shape[-1]))
+        x = torch.reshape(x, (1, self.in_channels * batch_size, x.shape[-1]))
         kernel = self.adapter(c)
-        kernel = torch.reshape(kernel, (self.out_channels * batch_size, self.in_channels, self.kernel_size))
-        y = nn.functional.conv1d(input=x, weight=kernel, dilation=self.dilation, groups=batch_size)
+        kernel = torch.reshape(
+            kernel, (self.out_channels * batch_size, self.in_channels, self.kernel_size)
+        )
+        y = nn.functional.conv1d(
+            input=x, weight=kernel, dilation=self.dilation, groups=batch_size
+        )
         return torch.reshape(y, (batch_size, self.out_channels, y.shape[-1]))
 
 
 """ 
 Gated convolutional layer, fully conditioned weights and bias"""
+
 
 class GatedTCNLayerFullyConditioned(nn.Module):
 
@@ -254,21 +344,36 @@ class GatedTCNLayerFullyConditioned(nn.Module):
         self.in_chan = chan_input
 
         self.cond_to_kernel = nn.Linear(in_features=cond_pars, out_features=kernel_size)
-        self.conv = ConditionedConv1D(in_channels=chan_input, out_channels=chan_output*2, kernel_size=kernel_size, dilation=dilation, cond_pars=cond_pars)
-        self.conditioned_bias = BiasConditioning(chan_output*2, cond_pars)
+        self.conv = ConditionedConv1D(
+            in_channels=chan_input,
+            out_channels=chan_output * 2,
+            kernel_size=kernel_size,
+            dilation=dilation,
+            cond_pars=cond_pars,
+        )
+        self.conditioned_bias = BiasConditioning(chan_output * 2, cond_pars)
         self.zpad = ((kernel_size - 1) * dilation, 0)
 
-        self.resi_con = nn.Conv1d(in_channels=chan_output, out_channels=chan_output, kernel_size=1, stride=1, padding=0)
+        self.resi_con = nn.Conv1d(
+            in_channels=chan_output,
+            out_channels=chan_output,
+            kernel_size=1,
+            stride=1,
+            padding=0,
+        )
 
-    '''
+    """
         x dims: (batch, channels, time)
         c dims: (batch, channels/features)
-    '''
+    """
+
     def forward(self, x, c):
         residual = x
         x_pad = torch.nn.functional.pad(x, self.zpad)
         y = self.conv(x_pad, c)
         y = self.conditioned_bias(y, c)
-        z = torch.tanh(y[:, 0:self.channels, :]) * torch.sigmoid(y[:, self.channels:, :])
+        z = torch.tanh(y[:, 0 : self.channels, :]) * torch.sigmoid(
+            y[:, self.channels :, :]
+        )
         x = self.resi_con(z) + residual
         return x, z
