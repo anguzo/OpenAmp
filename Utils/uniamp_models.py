@@ -77,8 +77,6 @@ class TCN(nn.Module):
             c = c.unsqueeze(0)
         if self.emb_proj:
             c = self.projector(c)
-        else:
-            c = emb
         x = self.first_conv(x)
         skip = 0
         for block in self.blocks:
