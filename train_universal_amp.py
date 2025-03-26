@@ -6,6 +6,7 @@ import auraloss
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from Open_Amp import data_manager
@@ -14,8 +15,8 @@ from Utils import uniamp_configs as configs
 from Utils import uniamp_dataloader, uniamp_models
 
 
-def train_one_epoch(epoch_index):
-    for i, batch in tqdm(enumerate(train_dloader)):
+def train_one_epoch(epoch_index, writer):
+    for i, batch in tqdm(enumerate(train_dloader), total=len(train_dloader)):
 
         inputs, targets, enc = batch
 
@@ -36,17 +37,18 @@ def train_one_epoch(epoch_index):
         optimizer.step()
 
         # Gather data and report
-        wandb.log(
-            {
-                "Loss/train/total": loss.item(),
-                "Loss/train/esr": td_l.item(),
-                "Loss/train/mr_stft": fd_l.item(),
-                "epoch": epoch_index,
-            }
+        writer.add_scalar(
+            "train/loss_total", loss.item(), epoch_index * len(train_dloader) + i
+        )
+        writer.add_scalar(
+            "train/loss_esr", td_l.item(), epoch_index * len(train_dloader) + i
+        )
+        writer.add_scalar(
+            "train/aura_mrstft", fd_l.item(), epoch_index * len(train_dloader) + i
         )
 
 
-def val_loop(network, dloader, current_epoch):
+def val_loop(network, dloader, current_epoch, writer):
     amp_names = []
     esr_collected = []
     mrsl_collected = []
@@ -68,15 +70,22 @@ def val_loop(network, dloader, current_epoch):
                 targets[:, :, val_dset.lead_in_samps :],
             )
 
-            for m in range(outputs.shape[0]):
-                if m in [0, 2, 4, 6]:
-                    metrics[f"model_{amp_name}_clip_{m}"] = wandb.Audio(
-                        outputs[m, 0, :].cpu().numpy(), sample_rate=44100
-                    )
-                    if current_epoch == 0:
-                        metrics[f"model_{amp_name}_clip_{m}_target"] = wandb.Audio(
-                            targets[m, 0, :].cpu().numpy(), sample_rate=44100
+            if i % (len(dloader) // 3) == 0:
+                for m in range(outputs.shape[0]):
+                    if m in [0, 2, 4, 6]:
+                        writer.add_audio(
+                            f"model_{amp_name}_clip_{m}",
+                            outputs[m, 0, :].cpu(),
+                            current_epoch,
+                            sample_rate=44100,
                         )
+                        if current_epoch == 0:
+                            writer.add_audio(
+                                f"model_{amp_name}_clip_{m}_target",
+                                targets[m, 0, :].cpu(),
+                                current_epoch,
+                                sample_rate=44100,
+                            )
 
             esr_loss = esr(output=outputs, target=targets)
             spec_loss = mrsl(x=outputs, y=targets)
@@ -87,18 +96,19 @@ def val_loop(network, dloader, current_epoch):
 
     esr_collected = torch.tensor(esr_collected)
     mrsl_collected = torch.tensor(mrsl_collected)
-    metrics["Loss/val/esr/mean"] = esr_collected.mean().item()
-    metrics["Loss/val/esr/min"] = esr_collected.min().item()
-    metrics["Loss/val/esr/max"] = esr_collected.max().item()
-    metrics["Loss/val/mrsl/mean"] = mrsl_collected.mean().item()
-    metrics["Loss/val/mrsl/min"] = mrsl_collected.min().item()
-    metrics["Loss/val/mrsl/max"] = mrsl_collected.max().item()
+    metrics["valid/loss_esr_mean"] = esr_collected.mean().item()
+    metrics["valid/loss_esr_min"] = esr_collected.min().item()
+    metrics["valid/loss_esr_max"] = esr_collected.max().item()
+    metrics["valid/loss_mrsl_mean"] = mrsl_collected.mean().item()
+    metrics["valid/loss_mrsl_min"] = mrsl_collected.min().item()
+    metrics["valid/loss_mrsl_max"] = mrsl_collected.max().item()
     for i, amp_name in enumerate(amp_names):
-        metrics[f"AmpSpecificLoss/val/esr/{amp_name}"] = esr_collected[i].item()
-        metrics[f"AmpSpecificLoss/val/mrsl/{amp_name}"] = mrsl_collected[i].item()
+        metrics[f"valid/AmpSpecificLoss_esr/{amp_name}"] = esr_collected[i].item()
+        metrics[f"valid/AmpSpecificLoss_mrsl/{amp_name}"] = mrsl_collected[i].item()
 
     metrics["epoch"] = current_epoch
-    wandb.log(metrics)
+    for key, value in metrics.items():
+        writer.add_scalar(key, value, current_epoch)
     print(f"epoch {current_epoch} val loss esr: {esr_collected.mean().item()}")
     return metrics
 
@@ -114,9 +124,6 @@ parser.add_argument("-vbs", "--val_batch_size", type=int, default=0)
 args = parser.parse_args()
 
 if __name__ == "__main__":
-
-    os.environ["WANDB_MODE"] = "offline"
-
     print(f"cpu cores - {os.cpu_count()}")
 
     if torch.cuda.is_available():
@@ -134,10 +141,10 @@ if __name__ == "__main__":
     if args.num_workers > 0:
         num_workers = args.num_workers
 
-    wandb.init(project="universal_amp_model", config=conf)
-    print(f"wandb run name {wandb.run.name}")
     save_dir = join("Results", f"conf_{args.train_config}")
     os.makedirs(save_dir, exist_ok=True)
+
+    writer = SummaryWriter(log_dir=save_dir)
 
     np.random.seed(42)
     device_list = np.random.choice(
@@ -189,13 +196,27 @@ if __name__ == "__main__":
 
     validation_sanity = False
 
-    for n in range(1000):
-        print(f"starting validation epoch {n}")
-        if n > 0 or validation_sanity:
-            val_loop(model, val_dloader, current_epoch=n)
+    start_epoch = 0
+    model_path = None
+    for file in os.listdir(save_dir):
+        if file.startswith("model_weights_ep-") and file.endswith(".pt"):
+            epoch_num = int(file.split("-")[-1].split(".")[0])
+            if epoch_num > start_epoch:
+                start_epoch = epoch_num
+                model_path = join(save_dir, file)
+
+    if model_path:
+        model.load_state_dict(torch.load(model_path))
+        start_epoch += 1
+
+    for n in range(start_epoch, 1000):
+        if n > start_epoch or validation_sanity:
+            print(f"starting validation epoch {n}")
+            val_loop(model, val_dloader, current_epoch=n, writer=writer)
         print(f"starting training epoch {n}")
-        train_one_epoch(n)
+        train_one_epoch(n, writer=writer)
 
         torch.save(model.state_dict(), join(save_dir, f"model_weights_ep-{n}.pt"))
 
-    val_loop(model, val_dloader, current_epoch=n + 1)
+    val_loop(model, val_dloader, current_epoch=n + 1, writer=writer)
+    writer.close()
